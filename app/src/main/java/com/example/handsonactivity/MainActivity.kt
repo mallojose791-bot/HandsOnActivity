@@ -12,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,17 +34,106 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.rememberAsyncImagePainter
 import com.example.handsonactivity.ui.theme.HandsOnActivityTheme
+import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.GET
 import kotlin.system.exitProcess
 
+// ============= RETROFIT API SETUP =============
 
-// Theme Colors
+// Data Models
+data class Post(
+    val userId: Int,
+    val id: Int,
+    val title: String,
+    val body: String
+)
+
+data class User(
+    val id: Int,
+    val name: String,
+    val username: String,
+    val email: String,
+    val phone: String,
+    val website: String
+)
+
+// API Interface
+interface JsonPlaceholderApi {
+    @GET("posts")
+    suspend fun getPosts(): List<Post>
+
+    @GET("users")
+    suspend fun getUsers(): List<User>
+}
+
+// Retrofit Instance
+object RetrofitInstance {
+    private const val BASE_URL = "https://jsonplaceholder.typicode.com/"
+
+    val api: JsonPlaceholderApi by lazy {
+        Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(JsonPlaceholderApi::class.java)
+    }
+}
+
+// UiState sealed class
+sealed class UiState<out T> {
+    object Idle : UiState<Nothing>()
+    object Loading : UiState<Nothing>()
+    data class Success<T>(val data: T) : UiState<T>()
+    data class Error(val message: String) : UiState<Nothing>()
+}
+
+// ViewModel
+class ApiViewModel : ViewModel() {
+    private val _postsState = mutableStateOf<UiState<List<Post>>>(UiState.Idle)
+    val postsState: State<UiState<List<Post>>> = _postsState
+
+    private val _usersState = mutableStateOf<UiState<List<User>>>(UiState.Idle)
+    val usersState: State<UiState<List<User>>> = _usersState
+
+    fun fetchPosts() {
+        viewModelScope.launch {
+            _postsState.value = UiState.Loading
+            try {
+                val posts = RetrofitInstance.api.getPosts()
+                _postsState.value = UiState.Success(posts)
+            } catch (e: Exception) {
+                _postsState.value = UiState.Error(e.message ?: "Unknown error occurred")
+            }
+        }
+    }
+
+    fun fetchUsers() {
+        viewModelScope.launch {
+            _usersState.value = UiState.Loading
+            try {
+                val users = RetrofitInstance.api.getUsers()
+                _usersState.value = UiState.Success(users)
+            } catch (e: Exception) {
+                _usersState.value = UiState.Error(e.message ?: "Unknown error occurred")
+            }
+        }
+    }
+}
+
+// ============= THEME COLORS =============
+
 private val Purple = Color(0xFF6B46C1)
 private val PurpleLight = Color(0xFF9C27B0)
 private val Background = Color(0xFFFFFBFE)
@@ -71,20 +162,12 @@ private val LightColors = lightColorScheme(
 )
 
 @Composable
-fun forceCloseAppButton() {
-    Button(onClick = {
-        exitProcess(0)
-    } ) {
-        Text("Exit Application")
-    }
-}
-
-@Composable
 fun HandsOnActivityTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = LightColors, content = content)
 }
 
-// Navigation
+// ============= NAVIGATION =============
+
 sealed class Screen {
     object Profile : Screen()
     object PersonalInfo : Screen()
@@ -94,9 +177,12 @@ sealed class Screen {
     object Privacy : Screen()
     object Terms : Screen()
     object FAQ : Screen()
+    object ApiData : Screen()
 }
 
 data class MenuItem(val title: String, val icon: ImageVector, val screen: Screen)
+
+// ============= MAIN ACTIVITY =============
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -110,28 +196,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        // Save data when app goes to background
         saveAllData()
     }
 
     override fun onStop() {
         super.onStop()
-        // Save data when app is stopped
         saveAllData()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Save data when app is destroyed
         saveAllData()
     }
 
     private fun saveAllData() {
         val sharedPreferences = getSharedPreferences("MiniProfilePrefs", Context.MODE_PRIVATE)
-        // Data is already being saved in real-time, but this ensures it's persisted
         sharedPreferences.edit().apply()
     }
 }
+
+// ============= MAIN APP =============
 
 @Composable
 fun MiniProfileApp() {
@@ -162,7 +246,6 @@ fun MiniProfileApp() {
         }
     }
 
-    // Save data when composable is disposed (app closes)
     DisposableEffect(Unit) {
         onDispose {
             saveData()
@@ -194,6 +277,7 @@ fun MiniProfileApp() {
             Screen.Privacy -> PrivacyPolicyFragment { currentScreen = Screen.Profile }
             Screen.Terms -> TermsFragment { currentScreen = Screen.Profile }
             Screen.FAQ -> FAQFragment { currentScreen = Screen.Profile }
+            Screen.ApiData -> ApiDataScreen { currentScreen = Screen.Profile }
         }
     }
 
@@ -205,7 +289,7 @@ fun MiniProfileApp() {
             confirmButton = {
                 Button(
                     onClick = {
-                        saveData() // Save before exiting
+                        saveData()
                         exitProcess(0)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
@@ -221,6 +305,305 @@ fun MiniProfileApp() {
         )
     }
 }
+
+// ============= API DATA SCREEN (WITH RETROFIT & UISTATE) =============
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ApiDataScreen(onBack: () -> Unit) {
+    val viewModel: ApiViewModel = viewModel()
+    var selectedTab by remember { mutableStateOf(0) }
+
+    // Fetch data when screen loads
+    LaunchedEffect(Unit) {
+        viewModel.fetchPosts()
+        viewModel.fetchUsers()
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("API Data") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = PrimaryContainer,
+                    titleContentColor = Color(0xFF21005D)
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // Tab Row
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = PrimaryContainer,
+                contentColor = Color(0xFF21005D)
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Posts") }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Users") }
+                )
+            }
+
+            // Content based on selected tab
+            when (selectedTab) {
+                0 -> PostsContent(viewModel.postsState.value)
+                1 -> UsersContent(viewModel.usersState.value)
+            }
+        }
+    }
+}
+
+@Composable
+fun PostsContent(uiState: UiState<List<Post>>) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        when (uiState) {
+            is UiState.Idle -> {
+                Text("Ready to load posts", color = Color.Gray)
+            }
+            is UiState.Loading -> {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Purple)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Loading posts...", color = Color.Gray)
+                }
+            }
+            is UiState.Success -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(uiState.data) { post ->
+                        PostItem(post)
+                    }
+                }
+            }
+            is UiState.Error -> {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "Error",
+                        tint = ErrorRed,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Error: ${uiState.message}",
+                        color = ErrorRed,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun UsersContent(uiState: UiState<List<User>>) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        when (uiState) {
+            is UiState.Idle -> {
+                Text("Ready to load users", color = Color.Gray)
+            }
+            is UiState.Loading -> {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Purple)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Loading users...", color = Color.Gray)
+                }
+            }
+            is UiState.Success -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(uiState.data) { user ->
+                        UserItem(user)
+                    }
+                }
+            }
+            is UiState.Error -> {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "Error",
+                        tint = ErrorRed,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Error: ${uiState.message}",
+                        color = ErrorRed,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PostItem(post: Post) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Surface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Purple.copy(0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = post.userId.toString(),
+                        color = Purple,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "User ${post.userId}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.Black.copy(0.6f)
+                    )
+                    Text(
+                        text = "Post #${post.id}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Black.copy(0.4f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                text = post.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.Black
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                text = post.body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.Black.copy(0.7f),
+                lineHeight = 20.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun UserItem(user: User) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Surface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(Purple.copy(0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Person,
+                    contentDescription = user.name,
+                    tint = Purple,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+
+            Spacer(Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = user.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "@${user.username}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Purple
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Email,
+                        contentDescription = "Email",
+                        tint = Color.Black.copy(0.6f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = user.email,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Black.copy(0.6f)
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Phone,
+                        contentDescription = "Phone",
+                        tint = Color.Black.copy(0.6f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = user.phone,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Black.copy(0.6f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ============= PROFILE SCREEN =============
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -259,203 +642,146 @@ fun ProfileScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header - Now just shows avatar and name/email from state
+            // Profile Image
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp)
-                    .background(Brush.verticalGradient(listOf(Purple, PurpleLight)))
+                    .size(120.dp)
+                    .clip(CircleShape)
+                    .background(PrimaryContainer)
+                    .clickable(enabled = isEditing) { launcher.launch("image/*") },
+                contentAlignment = Alignment.Center
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(100.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .border(3.dp, if (isEditing) Color.White else Color.Transparent, CircleShape)
-                            .clickable(enabled = isEditing) { launcher.launch("image/*") },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (profileImageUri != null) {
-                            // Show user's custom image
-                            Image(
-                                painter = rememberAsyncImagePainter(profileImageUri),
-                                contentDescription = "Profile Picture",
-                                modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                contentScale = ContentScale.Crop
-                            )
-                            if (isEditing) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.4f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Edit,
-                                        "Edit",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
-                            }
-                        } else {
-                            // Show default cat image from drawable
-                            Image(
-                                painter = painterResource(id = R.drawable.cat4),
-                                contentDescription = "Default Profile Picture",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize().clip(CircleShape)
-                            )
-                            if (isEditing) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(0.4f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Edit,
-                                        "Edit",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        name,
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                if (profileImageUri != null) {
+                    Image(
+                        painter = rememberAsyncImagePainter(profileImageUri),
+                        contentDescription = "Profile Image",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
-                    Text(email, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.9f))
+                } else {
+                    Icon(
+                        Icons.Default.AccountCircle,
+                        contentDescription = "Profile",
+                        modifier = Modifier.size(80.dp),
+                        tint = Purple
+                    )
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // Form Section - Only show when editing
             if (isEditing) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    OutlinedTextField(
-                        name, onNameChange, label = { Text("Name") },
-                        leadingIcon = { Icon(Icons.Default.Person, "Name") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        email, onEmailChange, label = { Text("Email") },
-                        leadingIcon = { Icon(Icons.Default.Email, "Email") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = SurfaceVariant)
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Star, "Star", tint = Purple)
-                                Spacer(Modifier.width(12.dp))
-                                Text("Become a Publisher")
-                            }
-                            Switch(isPublisher, onPublisherChange)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(24.dp))
+                Text(
+                    "Tap image to change",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
 
-            // Publisher Badge - Show when not editing and user is publisher
-            if (!isEditing && isPublisher) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Card(
-                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                        colors = CardDefaults.cardColors(containerColor = PrimaryContainer)
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Star, "Publisher", tint = Purple)
-                            Spacer(Modifier.width(12.dp))
-                            Text("Publisher Account", fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(24.dp))
-            } else if (!isEditing) {
-                Spacer(Modifier.height(16.dp))
-            }
+            Spacer(Modifier.height(20.dp))
 
-            // Menus
-            Text(
-                "Account Settings",
-                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            MenuCard(
-                listOf(
-                    MenuItem("Personal Information", Icons.Default.Person, Screen.PersonalInfo),
-                    MenuItem("Notifications", Icons.Default.Notifications, Screen.Notifications),
-                    MenuItem("Time Spent", Icons.Default.DateRange, Screen.TimeSpent),
-                    MenuItem("Following", Icons.Default.Favorite, Screen.Following)
-                ),
-                onNavigate
+            // Name Field
+            TextField(
+                value = name,
+                onValueChange = onNameChange,
+                label = { Text("Name") },
+                enabled = isEditing,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            Text(
-                "Help & Support",
-                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            MenuCard(
-                listOf(
-                    MenuItem("Privacy Policy", Icons.Default.Lock, Screen.Privacy),
-                    MenuItem("Terms & Conditions", Icons.Default.Info, Screen.Terms),
-                    MenuItem("FAQ & Help", Icons.Default.Star, Screen.FAQ)
-                ),
-                onNavigate
+            // Email Field
+            TextField(
+                value = email,
+                onValueChange = onEmailChange,
+                label = { Text("Email") },
+                enabled = isEditing,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // Logout
-            Button(
-                onLogout,
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(56.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
-                shape = RoundedCornerShape(12.dp)
+            // Publisher Toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.AutoMirrored.Filled.ExitToApp, "Exit", modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Logout", fontWeight = FontWeight.Bold)
+                Text("Publisher Account", modifier = Modifier.weight(1f))
+                Switch(
+                    checked = isPublisher,
+                    onCheckedChange = onPublisherChange,
+                    enabled = isEditing
+                )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
+
+            // Menu Items
+            menuItems.forEach { item ->
+                MenuItemRow(item) { onNavigate(item.screen) }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Logout Button
+            Button(
+                onClick = onLogout,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Logout")
+                Spacer(Modifier.width(8.dp))
+                Text("Logout")
+            }
         }
     }
 }
 
+val menuItems = listOf(
+    MenuItem("Personal Information", Icons.Default.Person, Screen.PersonalInfo),
+    MenuItem("Notifications", Icons.Default.Notifications, Screen.Notifications),
+    MenuItem("Time Spent", Icons.Default.Timer, Screen.TimeSpent),
+    MenuItem("Following", Icons.Default.Favorite, Screen.Following),
+    MenuItem("Privacy Policy", Icons.Default.Lock, Screen.Privacy),
+    MenuItem("Terms & Conditions", Icons.Default.Info, Screen.Terms),
+    MenuItem("FAQ", Icons.Default.Help, Screen.FAQ),
+    MenuItem("API Data", Icons.Default.Cloud, Screen.ApiData)
+)
+
+@Composable
+fun MenuItemRow(item: MenuItem, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(item.icon, contentDescription = item.title, tint = Purple, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(16.dp))
+        Text(
+            item.title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Go", tint = Color.Gray)
+    }
+}
+
+// ============= SCREEN FRAGMENTS =============
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PersonalInformationFragment(
-    name: String,
-    email: String,
-    onBack: () -> Unit
-) {
+fun PersonalInformationFragment(name: String, email: String, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -473,154 +799,14 @@ fun PersonalInformationFragment(
         }
     ) { padding ->
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                "Personal Information",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Your basic account information",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Black.copy(0.6f)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            // Name Card
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Surface),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Person,
-                            "Name",
-                            tint = Purple,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(Modifier.width(16.dp))
-                        Column {
-                            Text(
-                                "Name",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color.Black.copy(0.6f)
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // Email Card
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Surface),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Email,
-                            "Email",
-                            tint = Purple,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(Modifier.width(16.dp))
-                        Column {
-                            Text(
-                                "Email",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color.Black.copy(0.6f)
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                email,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MenuCard(items: List<MenuItem>, onClick: (Screen) -> Unit) {
-    Card(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        colors = CardDefaults.cardColors(containerColor = Surface),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Column {
-            items.forEachIndexed { i, item ->
-                Row(
-                    Modifier.fillMaxWidth().clickable { onClick(item.screen) }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(item.icon, item.title, tint = Purple, modifier = Modifier.size(24.dp))
-                        Spacer(Modifier.width(16.dp))
-                        Text(item.title)
-                    }
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Arrow", tint = Color.Black.copy(0.5f))
-                }
-                if (i < items.size - 1) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = Outline.copy(0.5f)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HorizontalDivider(modifier: Modifier, color: Color) {
-    Divider(modifier, color = color, thickness = 1.dp)
-}
-
-@Composable
-fun InfoCard(icon: ImageVector, label: String, value: String) {
-    Card(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceVariant)
-    ) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, label, tint = Purple, modifier = Modifier.size(24.dp))
-            Spacer(Modifier.width(16.dp))
-            Column {
-                Text(label, style = MaterialTheme.typography.labelMedium, color = Color.Black.copy(0.6f))
-                Spacer(Modifier.height(4.dp))
-                Text(value, style = MaterialTheme.typography.bodyLarge)
-            }
+            Text("Name: $name", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(8.dp))
+            Text("Email: $email", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(8.dp))
         }
     }
 }
@@ -628,13 +814,6 @@ fun InfoCard(icon: ImageVector, label: String, value: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotificationsFragment(onBack: () -> Unit) {
-    var pushEnabled by remember { mutableStateOf(true) }
-    var emailEnabled by remember { mutableStateOf(false) }
-    var likesEnabled by remember { mutableStateOf(true) }
-    var commentsEnabled by remember { mutableStateOf(true) }
-    var followersEnabled by remember { mutableStateOf(true) }
-    var messagesEnabled by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -651,156 +830,9 @@ fun NotificationsFragment(onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            Text(
-                "Notification Settings",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Manage how you receive notifications",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Black.copy(0.6f)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            // Notification Methods
-            Text(
-                "Notification Methods",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Surface),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Column {
-                    NotificationToggleItem(
-                        icon = Icons.Default.Notifications,
-                        title = "Push Notifications",
-                        description = "Receive notifications on your device",
-                        checked = pushEnabled,
-                        onCheckedChange = { pushEnabled = it }
-                    )
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    NotificationToggleItem(
-                        icon = Icons.Default.Email,
-                        title = "Email Notifications",
-                        description = "Receive notifications via email",
-                        checked = emailEnabled,
-                        onCheckedChange = { emailEnabled = it }
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Activity Notifications
-            Text(
-                "Activity Notifications",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Surface),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Column {
-                    NotificationToggleItem(
-                        icon = Icons.Default.Favorite,
-                        title = "Likes",
-                        description = "When someone likes your post",
-                        checked = likesEnabled,
-                        onCheckedChange = { likesEnabled = it }
-                    )
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    NotificationToggleItem(
-                        icon = Icons.Default.List,
-                        title = "Comments",
-                        description = "When someone comments on your post",
-                        checked = commentsEnabled,
-                        onCheckedChange = { commentsEnabled = it }
-                    )
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    NotificationToggleItem(
-                        icon = Icons.Default.Person,
-                        title = "New Followers",
-                        description = "When someone follows you",
-                        checked = followersEnabled,
-                        onCheckedChange = { followersEnabled = it }
-                    )
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    NotificationToggleItem(
-                        icon = Icons.Default.Email,
-                        title = "Messages",
-                        description = "When you receive a new message",
-                        checked = messagesEnabled,
-                        onCheckedChange = { messagesEnabled = it }
-                    )
-                }
-            }
+        Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+            Text("Notification settings will appear here", color = Color.Gray)
         }
-    }
-}
-
-@Composable
-fun NotificationToggleItem(
-    icon: ImageVector,
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            icon,
-            contentDescription = title,
-            tint = Purple,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                description,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black.copy(0.6f)
-            )
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Purple,
-                checkedTrackColor = Purple.copy(0.5f)
-            )
-        )
     }
 }
 
@@ -823,189 +855,8 @@ fun TimeSpentFragment(onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            // Today's Time
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = PrimaryContainer)
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        "Today",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color(0xFF21005D)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "2h 34m",
-                        style = MaterialTheme.typography.displayMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF21005D)
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "12 sessions",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF21005D).copy(0.7f)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Weekly Statistics
-            Text(
-                "This Week",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Surface),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    TimeSpentItem("Monday", "1h 45m", 0.7f)
-                    Spacer(Modifier.height(12.dp))
-                    TimeSpentItem("Tuesday", "2h 15m", 0.9f)
-                    Spacer(Modifier.height(12.dp))
-                    TimeSpentItem("Wednesday", "3h 02m", 1.0f)
-                    Spacer(Modifier.height(12.dp))
-                    TimeSpentItem("Thursday", "2h 34m", 0.85f)
-                    Spacer(Modifier.height(12.dp))
-                    TimeSpentItem("Friday", "1h 20m", 0.55f)
-                    Spacer(Modifier.height(12.dp))
-                    TimeSpentItem("Saturday", "4h 10m", 1.0f)
-                    Spacer(Modifier.height(12.dp))
-                    TimeSpentItem("Sunday", "2h 05m", 0.7f)
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Summary Stats
-            Text(
-                "Summary",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SummaryCard(
-                    title = "Weekly Total",
-                    value = "17h 11m",
-                    icon = Icons.Default.DateRange,
-                    modifier = Modifier.weight(1f)
-                )
-                SummaryCard(
-                    title = "Daily Average",
-                    value = "2h 27m",
-                    icon = Icons.Default.Star,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SummaryCard(
-                    title = "Total Sessions",
-                    value = "84",
-                    icon = Icons.Default.List,
-                    modifier = Modifier.weight(1f)
-                )
-                SummaryCard(
-                    title = "Longest Day",
-                    value = "4h 10m",
-                    icon = Icons.Default.Favorite,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun TimeSpentItem(day: String, time: String, progress: Float) {
-    Column {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                day,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                time,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Purple,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-        Spacer(Modifier.height(4.dp))
-        LinearProgressIndicator(
-            progress = progress,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp)),
-            color = Purple,
-            trackColor = Purple.copy(0.2f)
-        )
-    }
-}
-
-@Composable
-fun SummaryCard(title: String, value: String, icon: ImageVector, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Surface),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                icon,
-                contentDescription = title,
-                tint = Purple,
-                modifier = Modifier.size(32.dp)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Text(
-                title,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black.copy(0.6f),
-                textAlign = TextAlign.Center
-            )
+        Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+            Text("Time spent analytics will appear here", color = Color.Gray)
         }
     }
 }
@@ -1029,153 +880,9 @@ fun FollowingFragment(onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            Text(
-                "People that i  Follow",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Manage your following list",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Black.copy(0.6f)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            // Following Stats
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Card(
-                    Modifier.weight(1f),
-                    colors = CardDefaults.cardColors(containerColor = PrimaryContainer)
-                ) {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "248",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF21005D)
-                        )
-                        Text(
-                            "Following",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF21005D).copy(0.7f)
-                        )
-                    }
-                }
-                Card(
-                    Modifier.weight(1f),
-                    colors = CardDefaults.cardColors(containerColor = PrimaryContainer)
-                ) {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "1.2K",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF21005D)
-                        )
-                        Text(
-                            "Followers",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF21005D).copy(0.7f)
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                "Recent Activity",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // Following List
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Surface),
-                elevation = CardDefaults.cardElevation(2.dp)
-            ) {
-                Column {
-                    FollowingItem("Sarah Johnson", "@sarahjohnson", "2 hours ago")
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    FollowingItem("Mike Chen", "@mikechen", "5 hours ago")
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    FollowingItem("Emma Wilson", "@emmawilson", "1 day ago")
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    FollowingItem("James Brown", "@jamesbrown", "2 days ago")
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), Outline.copy(0.3f))
-                    FollowingItem("Lisa Anderson", "@lisaanderson", "3 days ago")
-                }
-            }
+        Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+            Text("Following list will appear here", color = Color.Gray)
         }
-    }
-}
-
-@Composable
-fun FollowingItem(name: String, username: String, time: String) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(Purple.copy(0.2f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Person,
-                contentDescription = name,
-                tint = Purple,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                username,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black.copy(0.6f)
-            )
-        }
-        Text(
-            time,
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.Black.copy(0.5f)
-        )
     }
 }
 
@@ -1199,109 +906,16 @@ fun PrivacyPolicyFragment(onBack: () -> Unit) {
         }
     ) { padding ->
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                "Privacy Policy",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Last updated: January 18, 2026",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black.copy(0.6f)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            PrivacySection(
-                title = "1. Information We Collect",
-                content = "We collect information you provide directly to us, including your name, email address, profile information, and any other information you choose to provide."
-            )
-
-            PrivacySection(
-                title = "2. How We Use Your Information",
-                content = "We use the information we collect to provide, maintain, and improve our services, to communicate with you, and to personalize your experience."
-            )
-
-            PrivacySection(
-                title = "3. Information Sharing",
-                content = "We do not share your personal information with third parties except as described in this policy or with your consent."
-            )
-
-            PrivacySection(
-                title = "4. Data Security",
-                content = "We implement appropriate security measures to protect your personal information against unauthorized access, alteration, disclosure, or destruction."
-            )
-
-            PrivacySection(
-                title = "5. Your Rights",
-                content = "You have the right to access, update, or delete your personal information at any time. You can do this through your account settings or by contacting us."
-            )
-
-            PrivacySection(
-                title = "6. Cookies",
-                content = "We use cookies and similar technologies to collect information about your browsing activities and to personalize your experience."
-            )
-
-            PrivacySection(
-                title = "7. Children's Privacy",
-                content = "Our services are not directed to children under 13. We do not knowingly collect personal information from children under 13."
-            )
-
-            PrivacySection(
-                title = "8. Changes to This Policy",
-                content = "We may update this privacy policy from time to time. We will notify you of any changes by posting the new policy on this page."
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = PrimaryContainer)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "Contact Us",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF21005D)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "If you have any questions about this Privacy Policy, please contact us at privacy@miniprofile.com",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF21005D).copy(0.8f)
-                    )
-                }
-            }
+            Text("Privacy Policy", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            Text("Your privacy is important to us. This privacy policy explains how we collect and use your information.", style = MaterialTheme.typography.bodyMedium)
         }
-    }
-}
-
-@Composable
-fun PrivacySection(title: String, content: String) {
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = Color.Black.copy(0.8f)
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            content,
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color.Black.copy(0.6f),
-            lineHeight = 24.sp
-        )
-        Spacer(Modifier.height(20.dp))
     }
 }
 
@@ -1325,66 +939,15 @@ fun TermsFragment(onBack: () -> Unit) {
         }
     ) { padding ->
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                "Terms & Conditions",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Last updated: January 18, 2026",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black.copy(0.6f)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            PrivacySection(
-                title = "1. Acceptance of Terms",
-                content = "By accessing and using MiniProfile, you accept and agree to be bound by the terms and provision of this agreement."
-            )
-
-            PrivacySection(
-                title = "2. User Accounts",
-                content = "You are responsible for maintaining the confidentiality of your account and password. You agree to accept responsibility for all activities that occur under your account."
-            )
-
-            PrivacySection(
-                title = "3. Content",
-                content = "You retain ownership of all content you post. By posting content, you grant us a license to use, modify, and display that content in connection with our services."
-            )
-
-            PrivacySection(
-                title = "4. Prohibited Activities",
-                content = "You may not use our services for any illegal purposes or to violate any laws. You may not post content that is harmful, threatening, abusive, or otherwise objectionable."
-            )
-
-            PrivacySection(
-                title = "5. Termination",
-                content = "We may terminate or suspend your account immediately, without prior notice, for any reason, including breach of these Terms."
-            )
-
-            PrivacySection(
-                title = "6. Disclaimer",
-                content = "Our services are provided \"as is\" without warranties of any kind, either express or implied. We do not guarantee that our services will be uninterrupted or error-free."
-            )
-
-            PrivacySection(
-                title = "7. Limitation of Liability",
-                content = "We shall not be liable for any indirect, incidental, special, consequential, or punitive damages resulting from your use of our services."
-            )
-
-            PrivacySection(
-                title = "8. Changes to Terms",
-                content = "We reserve the right to modify these terms at any time. Continued use of our services after changes constitutes acceptance of the modified terms."
-            )
+            Text("Terms & Conditions", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            Text("By using this application, you agree to these terms and conditions.", style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -1395,7 +958,7 @@ fun FAQFragment(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("FAQ & Help") },
+                title = { Text("FAQ") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -1409,159 +972,16 @@ fun FAQFragment(onBack: () -> Unit) {
         }
     ) { padding ->
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                "Frequently Asked Questions",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF21005D)
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Find answers to common questions",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Black.copy(0.6f)
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                "Account",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
+            Text("Frequently Asked Questions", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
-
-            FAQItem(
-                question = "How do I change my profile picture?",
-                answer = "Tap the Edit icon on your profile, then tap on your profile picture to select a new image from your gallery."
-            )
-
-            FAQItem(
-                question = "How do I update my email?",
-                answer = "Go to your profile, tap the Edit icon, and update your email in the Email field. Don't forget to save your changes."
-            )
-
-            FAQItem(
-                question = "Can I delete my account?",
-                answer = "Yes, you can delete your account by going to Settings > Account > Delete Account. This action is permanent and cannot be undone."
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                "Privacy & Security",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            FAQItem(
-                question = "Is my data secure?",
-                answer = "Yes, we use industry-standard encryption and security measures to protect your personal information."
-            )
-
-            FAQItem(
-                question = "Who can see my profile?",
-                answer = "Your profile visibility depends on your privacy settings. You can control who sees your profile in the Privacy Settings."
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                "Features",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black.copy(0.6f)
-            )
-            Spacer(Modifier.height(12.dp))
-
-            FAQItem(
-                question = "What is a Publisher Account?",
-                answer = "A Publisher Account gives you access to additional features like analytics, scheduled posts, and advanced content management tools."
-            )
-
-            FAQItem(
-                question = "How do I enable notifications?",
-                answer = "Go to Settings > Notifications and toggle on the types of notifications you want to receive."
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = PrimaryContainer)
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        Icons.Default.Email,
-                        "Contact",
-                        tint = Color(0xFF21005D),
-                        modifier = Modifier.size(32.dp)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "Still need help?",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF21005D)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Contact our support team at support@miniprofile.com",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF21005D).copy(0.8f),
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun FAQItem(question: String, answer: String) {
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = Surface),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Icon(
-                    Icons.Default.Info,
-                    "Question",
-                    tint = Purple,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    question,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                answer,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.Black.copy(0.7f),
-                lineHeight = 20.sp
-            )
+            Text("Q: How do I update my profile?", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+            Text("A: Tap the edit button on your profile screen.", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
